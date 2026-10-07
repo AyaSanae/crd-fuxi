@@ -1,0 +1,23 @@
+# 现代 MiuiCamera：给 platform_app 走 Xiaomi postproc HIDL / camera HAL。
+# 不要给 App 直接 write DSP 设备节点——QCOM sm8550 vendor sepolicy neverallow：
+#   device/qcom/sepolicy_vndr/sm8550/generic/vendor/common/domain.te
+#   platform_app + vendor_{q,x}dsp_device:{ioctl,write,open} 会让 secilc 失败。
+# 不要 get_prop(vendor_panel_info_prop)：LOS 没有这个 type，checkpolicy 直接挂。
+# notch 用 system.prop 的 ro.miui.notch=1 兜。
+
+hal_client_domain(platform_app, vendor_hal_camerapostproc_xiaomi)
+
+binder_use(platform_app)
+binder_call(platform_app, hal_camera_default)
+binder_call(platform_app, vendor_hal_camerapostproc_xiaomi)
+allow platform_app vendor_hal_camerapostproc_xiaomi_hwservice:hwservice_manager find;
+
+allow platform_app adsprpcd_file:dir { open read search };
+
+allow platform_app vendor_camera_data_file:dir { append map r_dir_perms write };
+allow platform_app vendor_camera_data_file:file { getattr open read };
+
+allow platform_app app_data_file:file execute;
+
+get_prop(platform_app, vendor_camera_sensor_prop)
+get_prop(platform_app, vendor_display_prop)

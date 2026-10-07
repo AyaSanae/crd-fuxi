@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Xiaomi 13 (fuxi) local manifest
+  对应: crDroid 16.0  +  LineageOS lineage-23.2
+
+  放到源码树:  .repo/local_manifests/fuxi.xml
+  然后:        repo sync -c --no-tags --no-clone-bundle -j$(nproc)
+
+  编 15.0 时把所有 revision 改成 lineage-22.2，或直接跑 sync-crdroid-fuxi.sh --branch 15.0
+
+  MiuiCamera 不在这份 manifest 里：fuxi-dev 那个仓库是空的，也不需要小米框架。
+  脚本会把 overlays/miuicamera-fuxi 拷进设备树，再用 HyperOS zip 抽 APK。
+-->
+<manifest>
+  <remote name="los"     fetch="https://github.com/LineageOS/" />
+  <remote name="muppets" fetch="https://github.com/TheMuppets/" />
+
+  <!-- 设备树 -->
+  <project name="android_device_xiaomi_fuxi" path="device/xiaomi/fuxi"
+           remote="los" revision="lineage-23.2" />
+  <project name="android_device_xiaomi_sm8550-common" path="device/xiaomi/sm8550-common"
+           remote="los" revision="lineage-23.2" />
+
+  <!-- Kernel / modules / dtbo -->
+  <project name="android_kernel_xiaomi_sm8550" path="kernel/xiaomi/sm8550"
+           remote="los" revision="lineage-23.2" />
+  <project name="android_kernel_xiaomi_sm8550-modules" path="kernel/xiaomi/sm8550-modules"
+           remote="los" revision="lineage-23.2" />
+  <project name="android_kernel_xiaomi_sm8550-devicetrees" path="kernel/xiaomi/sm8550-devicetrees"
+           remote="los" revision="lineage-23.2" />
+
+  <!-- common 依赖，平台 manifest 不带 -->
+  <project name="android_hardware_xiaomi" path="hardware/xiaomi"
+           remote="los" revision="lineage-23.2" />
+
+  <!-- proprietary blobs，没有这两份编不起来 -->
+  <project name="proprietary_vendor_xiaomi_fuxi" path="vendor/xiaomi/fuxi"
+           remote="muppets" revision="lineage-23.2" />
+  <project name="proprietary_vendor_xiaomi_sm8550-common" path="vendor/xiaomi/sm8550-common"
+           remote="muppets" revision="lineage-23.2" />
+</manifest>
