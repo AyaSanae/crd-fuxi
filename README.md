@@ -2,6 +2,267 @@
 
 非官方 crDroid 16（Android 16 / LineageOS 23.2）编译备忘。脚本只负责整理清单和覆盖层，**不要在 Windows 上拉 AOSP**。真源码在 Linux，当前 AutoDL 路径是 `/root/autodl-tmp/crd`。
 
+---
+
+## 整条流程（先看这个）
+
+两套走法：日常用脚本；脚本不好使或你想自己控 `breakfast` 就走手动。两条路读的是同一棵源码树。
+
+```text
+Windows 本目录（脚本 / overlay / build.conf）
+        │  上传到 Linux，不要在 Windows 上 repo sync
+        ▼
+① 去 CRLF → ② 装依赖（一次）→ ③ sync 拉源码
+        ▼
+④ 改源码树里的 build.conf（用户名 / LTO / -j）
+        ▼
+⑤ A  ./build-fuxi.sh          ← 推荐
+   B  手动 source + breakfast + mka
+        ▼
+out/target/product/fuxi/*.zip
+```
+
+### 第一次（空机器）
+
+在 Linux 上，假设脚本放在 `~/tmp-scripts`，源码要落到 `/root/autodl-tmp/crd`：
+
+```bash
+cd ~/tmp-scripts
+sed -i 's/\r$//' *.sh
+chmod +x sync-crdroid-fuxi.sh build-fuxi.sh
+
+# 代理：GitHub / crDroid / LOS / TheMuppets 走这个；AOSP 走清华，不占代理
+export http_proxy=http://127.0.0.1:7890
+export https_proxy=http://127.0.0.1:7890
+
+# ① 只装依赖，不拉代码
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --install-deps --skip-sync
+
+# ② 改旁边的 build.conf（编译人、KERNEL_LTO、MAKE_JOBS…）再拉
+#    或把参数写在命令行，见下面「脚本怎么用」
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh
+
+# ③ 进源码树编译（脚本会把自己拷进树里）
+cd /root/autodl-tmp/crd
+./build-fuxi.sh
+```
+
+第一次 sync 很久，中断后用同一条 `SRC_DIR=... ./sync-crdroid-fuxi.sh` 或 `--sync-only` 续传。
+
+### 源码已经在、接着编
+
+```bash
+# 若刚从 Windows 又传了一份新脚本 / overlay：
+cd ~/tmp-scripts
+sed -i 's/\r$//' *.sh
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --skip-sync
+# 刷新 overlay、vendor/extra、build-fuxi.sh；不覆盖已有 build.conf，只补新键
+
+cd /root/autodl-tmp/crd
+# 按需改 build.conf
+./build-fuxi.sh
+```
+
+不用清整个 `out`。只改了 `KERNEL_LTO` 时，`build-fuxi.sh` 会自己清 `KERNEL_OBJ`。
+
+### 编挂了再续
+
+```bash
+cd /root/autodl-tmp/crd
+./build-fuxi.sh
+# 或手动（同一 shell 里已经 source 过就不用再 breakfast）：
+mka bacon -j4
+```
+
+---
+
+## 脚本怎么用
+
+### `build.conf` —— 所有可调项的默认来源
+
+放在脚本旁边。`sync` 第一次会拷进源码树 `SRC_DIR/build.conf`。之后以**源码树那份**为准，sync 不会覆盖，只补缺失键。
+
+`./build-fuxi.sh` 会读它。直接 `brunch` / 裸 `breakfast` **不读**，必须自己 `source vendor/extra/env.sh` 或导出同样的变量。
+
+| 键 | 默认 | 作用 |
+| --- | --- | --- |
+| `BUILD_USERNAME` | `crdroid` | `ro.build.user`，不跟当前 Linux 用户 |
+| `BUILD_HOSTNAME` | `fuxi` | `ro.build.host`，不跟 hostname |
+| `CRDROID_MAINTAINER` | 同 username | 设置里的维护者 |
+| `KERNEL_LTO` | `thin` | `none` / `thin` / `full` / 空=设备树默认 |
+| `SYNC_JOBS` | `4` | `repo sync -j`，清华太高会 503 |
+| `MAKE_JOBS` | `4` | `mka -j`，容器里别上 8 |
+| `USE_CCACHE` | `1` | `0` 关闭 |
+| `CCACHE_SIZE` | `20G` | 上限 |
+| `CCACHE_DIR` | 空 | 空则 `/root/autodl-tmp/.ccache` 或 `~/.cache/ccache` |
+| `AOSP_MIRROR` | 清华 | 空=走 googlesource（会吃代理） |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 空 | 空=用当前环境的 `http_proxy` |
+
+命令行参数会盖过 conf。
+
+### `sync-crdroid-fuxi.sh` —— 拉代码 + 铺 overlay
+
+**只在 Linux 跑。** 负责：`repo init` crDroid、写 `.repo/local_manifests/fuxi.xml`、`repo sync`、拷 MiuiCamera overlay、写 `vendor/extra`（身份 / LTO / env.sh）、拷 `build-fuxi.sh`。
+
+```bash
+# 通用形式
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh [选项…]
+```
+
+`SRC_DIR` 也可用 `--src`。不写则默认 `~/android/crdroid`。
+
+| 选项 | 干什么 |
+| --- | --- |
+| （无参数） | init（若还没有）+ 写 manifest + sync + 装 overlay/身份 |
+| `--install-deps` | `apt` 装编译依赖和 ccache（要 sudo） |
+| `--skip-sync` | 写 manifest / 装 overlay / 写 extra，**不** `repo sync`。源码已在、只更新脚本时用 |
+| `--sync-only` | 已 init 过，只更新 manifest 再 sync |
+| `--manifest-only` | 只写 `fuxi.xml`，不 init、不 sync |
+| `--branch 16.0\|15.0` | crDroid 分支。16.0↔LOS 23.2，15.0↔22.2 |
+| `--jobs N` | sync 并发，默认 4 |
+| `--aosp-mirror URL` | 改 AOSP 镜像 |
+| `--no-tuna` | AOSP 不走清华，改走代理直连 googlesource |
+| `--proxy URL` | 同时设 `http_proxy`/`https_proxy`（非 AOSP） |
+| `--vendor themuppets\|extract` | 默认 themuppets 才能直接编；extract 要自己抽 blob |
+| `--miuicamera` / `--no-miuicamera` | 默认开 overlay；关了就不拷 |
+| `--hyperos-zip FILE` | sync 完从 HyperOS 官方包抽 MiuiCamera APK/JNI |
+| `--build-user` `--build-host` `--maintainer` | 盖过 conf 里的显示名 |
+| `--kernel-lto none\|thin\|full` | 盖过 conf，写入 `BoardConfigExtra.mk` |
+| `--make-jobs N` | 只记到环境/提示，真正编译看 `build-fuxi.sh` 读的 conf |
+| `-h` | 帮助 |
+
+常用组合：
+
+```bash
+# 只装依赖
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --install-deps --skip-sync
+
+# 正常拉（AOSP 清华 + 其余走已 export 的代理）
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh
+
+# 命令行指定代理和身份
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh \
+  --proxy http://127.0.0.1:7890 \
+  --build-user AyaSanae --build-host fuxi --maintainer Aya \
+  --kernel-lto thin
+
+# 源码有了，只把新 overlay / 新 build-fuxi.sh 铺进去
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --skip-sync
+
+# 抽 Leica
+SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --sync-only \
+  --hyperos-zip /path/to/fuxi-hyperos.zip
+```
+
+sync 结束时源码树里会有：
+
+- `.repo/local_manifests/fuxi.xml`
+- `device/xiaomi/miuicamera-fuxi/`（overlay 副本）
+- `vendor/extra/product.mk` `BoardConfigExtra.mk` `build_info.mk` `env.sh`
+- `build-fuxi.sh`、`build.conf`（后者仅当树里还没有）
+
+### `build-fuxi.sh` —— 一键开编
+
+可以放在脚本目录，用 `SRC_DIR=... ./build-fuxi.sh`；sync 之后也在源码树根目录，进树直接跑。
+
+```bash
+cd /root/autodl-tmp/crd
+./build-fuxi.sh              # userdebug
+./build-fuxi.sh user         # 正式包
+./build-fuxi.sh userdebug    # 显式写变体
+```
+
+脚本在树外时：
+
+```bash
+SRC_DIR=/root/autodl-tmp/crd ./build-fuxi.sh
+```
+
+它按顺序做：
+
+1. 读 `SRC_DIR/build.conf`（没有再读脚本旁边那份）
+2. `export BUILD_USERNAME` `BUILD_HOSTNAME` `KBUILD_BUILD_*`
+3. 按 `KERNEL_LTO` 写 `vendor/extra/BoardConfigExtra.mk`；和上次不同就删 `KERNEL_OBJ`
+4. `USE_CCACHE=1` `CCACHE_EXEC` `CCACHE_DIR`，`ccache -M`
+5. `source build/envsetup.sh`（**不加** `set -euo`）
+6. `breakfast fuxi $VARIANT`
+7. `mka bacon -j$MAKE_JOBS`
+
+**不要**给这个脚本或它 source 的环境加 `set -euo pipefail`。
+
+产物：`out/target/product/fuxi/`，刷机包一般是 `crDroidAndroid-*-fuxi-*.zip`。
+
+---
+
+## 手动编译流程
+
+和 `build-fuxi.sh` 做的事相同，只是自己敲。适合：已经 `breakfast` 过、只想续 `mka`；或要改 lunch 变体、先 `mka bootimage` 之类。
+
+**前提：** 已经 `sync` 过，`vendor/extra/env.sh` 存在。新开的 SSH 窗口环境是空的，必须重来一遍 1–4。
+
+在**同一条 shell**里，不要 `set -e` / `set -u` / `set -o pipefail`：
+
+```bash
+cd /root/autodl-tmp/crd
+
+# 1) 身份 + ccache（不 source 这个，关于手机会变成 root@容器名，ccache 也不走）
+source vendor/extra/env.sh
+
+# 若 env.sh 是旧的、没有 ccache，补这三行（目录要和查统计时一致）
+export USE_CCACHE=1
+export CCACHE_EXEC=/usr/bin/ccache
+export CCACHE_DIR=/root/autodl-tmp/.ccache
+mkdir -p "$CCACHE_DIR"
+ccache -M 20G
+ccache -o compression=true
+
+# 2) 内核 LTO：改 build.conf 不够，手动编要自己保证 mk 里有
+#    脚本编会自动写；手动可以看一眼
+grep KERNEL_LTO vendor/extra/BoardConfigExtra.mk
+# 没有或要改：
+#   echo 'KERNEL_LTO := thin' >> vendor/extra/BoardConfigExtra.mk
+# 从 full/none 换成 thin 必须清内核中间文件，否则仍按旧配置链：
+#   rm -rf out/target/product/fuxi/obj/KERNEL_OBJ
+
+# 3) Android 编译环境。这一步会定义 breakfast / mka / lunch
+source build/envsetup.sh
+
+# 4) 选设备和变体。只需每个新 shell 做一次
+breakfast fuxi userdebug
+# 等价：lunch lineage_fuxi-bp2a-userdebug
+# user 包：breakfast fuxi user
+
+# nsjail / sched_setaffinity 警告可忽略
+
+# 5) 开编。bacon = 整包。-j 跟机器内存/cgroup 走，AutoDL 用 4
+mka bacon -j4
+
+# 只编内核 / 只编 boot：
+# mka bootimage -j4
+```
+
+中途挂了、环境还在：
+
+```bash
+# 不要再 source 一遍也可以
+mka bacon -j4
+```
+
+窗口断了、重新 SSH：从 `source vendor/extra/env.sh` 重新走 1–5。`out/` 留着就是增量。
+
+查 ccache 必须带同一个目录：
+
+```bash
+echo "$USE_CCACHE $CCACHE_EXEC $CCACHE_DIR"
+CCACHE_DIR=/root/autodl-tmp/.ccache ccache -s
+```
+
+手动编时若跳过 `env.sh` / 那三个 export，`ccache -s` 就会一直是 `0.0 / 30G`。
+
+`brunch fuxi` = `breakfast` + `mka bacon`，但**不会**读 `build.conf`，也**不会**写 LTO、开 ccache。要 `brunch` 也得先 `source vendor/extra/env.sh`。
+
+---
+
 ## 目录里有什么
 
 | 文件 | 作用 |
@@ -44,76 +305,7 @@ chmod +x sync-crdroid-fuxi.sh build-fuxi.sh
 SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --install-deps --skip-sync
 ```
 
-依赖含 `ccache`、`repo`、`git-lfs`。ccache 预算默认 20G（可在 `build.conf` 改）。
-
-## `build.conf`
-
-改完用 `./build-fuxi.sh`。直接 `brunch` 不读这份文件。
-
-```bash
-# 关于手机，不跟编译机 hostname
-BUILD_USERNAME=crdroid
-BUILD_HOSTNAME=fuxi
-CRDROID_MAINTAINER=crdroid
-
-# 内核 LTO: none | thin | full | 留空=设备树默认
-# full 在 AutoDL 上 ld.lld vmlinux.o 容易 Error 137
-KERNEL_LTO=thin
-
-SYNC_JOBS=4          # 清华 AOSP 太高会 503
-MAKE_JOBS=4          # 容器里 -j8 容易把 ninja 整进程掐死
-
-USE_CCACHE=1
-CCACHE_SIZE=20G
-CCACHE_DIR=          # 空= /root/autodl-tmp/.ccache 或 ~/.cache/ccache
-
-AOSP_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/git/AOSP
-HTTP_PROXY=          # 非 AOSP 走这个；空则用环境变量
-HTTPS_PROXY=
-```
-
-改 `KERNEL_LTO` 后再跑 `build-fuxi.sh`，脚本会重写 `vendor/extra/BoardConfigExtra.mk` 并清 `out/target/product/fuxi/obj/KERNEL_OBJ`。
-
-源码树里若已有旧 `build.conf`，`sync` **不会覆盖**，只补缺失键。
-
-## 拉源码
-
-```bash
-# AOSP 走清华（进 no_proxy）；GitHub / crDroid / LOS / TheMuppets 走代理
-export http_proxy=http://127.0.0.1:7890
-export https_proxy=http://127.0.0.1:7890
-
-SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh
-# 已 init 过只更新:
-SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --sync-only
-```
-
-清华并发默认 `-j4`。中断后同一条命令可续传。
-
-## 编译
-
-```bash
-cd /root/autodl-tmp/crd
-./build-fuxi.sh                 # 默认 userdebug
-# ./build-fuxi.sh user
-```
-
-脚本会：读 conf → 写 `KERNEL_LTO` → `USE_CCACHE=1` + `CCACHE_EXEC` + `CCACHE_DIR` → `source envsetup` → `breakfast fuxi` → `mka bacon -j$MAKE_JOBS`。
-
-**不要**给 `build-fuxi.sh` 加 `set -euo pipefail`。`envsetup.sh` 里有未绑定变量和返回 1 的探测，`set -u` 报 `TOP: unbound variable`，`set -e` 会在 lunch 后静默退出。
-
-手动编必须先带环境：
-
-```bash
-source vendor/extra/env.sh
-source build/envsetup.sh
-breakfast fuxi userdebug
-mka bacon -j4
-```
-
-产物：`out/target/product/fuxi/`。
-
-`breakfast` 里 nsjail / `sched_setaffinity` 在 AutoDL 上常见，可忽略。
+依赖含 `ccache`、`repo`、`git-lfs`。怎么装、怎么拉、怎么编见上文「整条流程」和「脚本怎么用」。
 
 ## MiuiCamera
 
@@ -203,21 +395,6 @@ df -h /root/autodl-tmp /root
 ### 8. 清华 AOSP 503
 
 `SYNC_JOBS=4`，不要按 `nproc` 拉 AOSP。
-
-## 下次在 AutoDL 上续编
-
-把本目录（至少 `build.conf`、两个 `.sh`、`overlays/`）上传到机器后：
-
-```bash
-sed -i 's/\r$//' *.sh
-export http_proxy=... https_proxy=...     # 若还要 sync
-SRC_DIR=/root/autodl-tmp/crd ./sync-crdroid-fuxi.sh --skip-sync
-# 会刷新 overlay / vendor/extra / build-fuxi.sh，不覆盖已有 build.conf，只补新键
-
-cd /root/autodl-tmp/crd
-# 按需改 build.conf 里的 KERNEL_LTO / MAKE_JOBS / 用户名
-./build-fuxi.sh
-```
 
 ## 不要做的事
 
